@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Load and normalize statesData.json
 let statesData;
@@ -67,107 +67,134 @@ async function seedFunFacts() {
 }
 
 // Helper: Merge JSON data with MongoDB funfacts
-async function getStateWithFunfacts(stateCode) {
-  const stateData = statesData.find(s => s.stateCode === stateCode.toUpperCase());
+async function getStateWithFunfacts(stateCode, includeEmptyFunfacts = true) {
+  const normalized = stateCode.toUpperCase();
+  const stateData = statesData.find(s => s.stateCode === normalized);
   if (!stateData) return null;
-  
-  const mongoState = await State.findOne({ stateCode: stateCode.toUpperCase() });
-  return { ...stateData, funfacts: mongoState?.funfacts || [] };
+
+  const mongoState = await State.findOne({ stateCode: normalized });
+  const funfacts = mongoState?.funfacts || [];
+
+  if (includeEmptyFunfacts) return { ...stateData, funfacts };
+  if (funfacts.length) return { ...stateData, funfacts };
+  return { ...stateData };
+}
+
+function getStateByCode(stateCode) {
+  return statesData.find(s => s.stateCode === stateCode.toUpperCase()) || null;
+}
+
+function invalidStateAbbreviation(res) {
+  return res.status(400).json({ message: 'Invalid state abbreviation parameter' });
 }
 
 // 🏠 ROOT: HTML landing page
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public/index.html')));
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public/index')));
 
 // 📊 STATES API ROUTES
 app.get('/states/', async (req, res) => {
   const { contig } = req.query;
-  
+
   let filtered = statesData;
   if (contig === 'true') filtered = statesData.filter(s => !['AK', 'HI'].includes(s.stateCode));
   if (contig === 'false') filtered = statesData.filter(s => ['AK', 'HI'].includes(s.stateCode));
-  
+
   const statesWithFacts = await Promise.all(
-    filtered.map(async state => ({
-      ...state,
-      funfacts: (await State.findOne({ stateCode: state.stateCode }))?.funfacts || []
-    }))
+    filtered.map(async state => getStateWithFunfacts(state.stateCode, false))
   );
-  
+
   res.json(statesWithFacts);
 });
 
 app.get('/states/:state', async (req, res) => {
-  const state = await getStateWithFunfacts(req.params.state);
-  if (!state) return res.status(404).json({ error: '404 Not Found' });
+  const stateCode = req.params.state.toUpperCase();
+  if (!getStateByCode(stateCode)) return invalidStateAbbreviation(res);
+
+  const state = await getStateWithFunfacts(stateCode, true);
   res.json(state);
 });
 
 app.get('/states/:state/funfact', async (req, res) => {
-  const state = await getStateWithFunfacts(req.params.state);
-  if (!state) return res.status(404).json({ error: '404 Not Found' });
-  
+  const stateCode = req.params.state.toUpperCase();
+  const baseState = getStateByCode(stateCode);
+  if (!baseState) return invalidStateAbbreviation(res);
+
+  const state = await getStateWithFunfacts(stateCode, true);
   const { funfacts } = state;
-  if (!funfacts?.length) return res.status(404).json({ error: 'No fun facts found for this state' });
-  
+
+  if (!funfacts?.length) {
+    return res.status(404).json({ message: `No Fun Facts found for ${baseState.stateName}` });
+  }
+
   res.json({ funfact: funfacts[Math.floor(Math.random() * funfacts.length)] });
 });
 
 app.get('/states/:state/capital', async (req, res) => {
-  const state = statesData.find(s => s.stateCode === req.params.state.toUpperCase());
-  if (!state) return res.status(404).json({ error: '404 Not Found' });
+  const state = getStateByCode(req.params.state);
+  if (!state) return invalidStateAbbreviation(res);
   res.json({ state: state.stateName, capital: state.capital });
 });
 
 app.get('/states/:state/nickname', async (req, res) => {
-  const state = statesData.find(s => s.stateCode === req.params.state.toUpperCase());
-  if (!state) return res.status(404).json({ error: '404 Not Found' });
+  const state = getStateByCode(req.params.state);
+  if (!state) return invalidStateAbbreviation(res);
   res.json({ state: state.stateName, nickname: state.nickname });
 });
 
 app.get('/states/:state/population', async (req, res) => {
-  const state = statesData.find(s => s.stateCode === req.params.state.toUpperCase());
-  if (!state) return res.status(404).json({ error: '404 Not Found' });
-  res.json({ state: state.stateName, population: state.population });
+  const state = getStateByCode(req.params.state);
+  if (!state) return invalidStateAbbreviation(res);
+  res.json({ state: state.stateName, population: Number(state.population).toLocaleString('en-US') });
 });
 
 app.get('/states/:state/admission', async (req, res) => {
-  const state = statesData.find(s => s.stateCode === req.params.state.toUpperCase());
-  if (!state) return res.status(404).json({ error: '404 Not Found' });
+  const state = getStateByCode(req.params.state);
+  if (!state) return invalidStateAbbreviation(res);
   res.json({ state: state.stateName, admitted: state.admission });
 });
 
 // ➕ POST: Add funfacts (append to existing)
 app.post('/states/:state/funfact', async (req, res) => {
+  const state = getStateByCode(req.params.state);
+  if (!state) return invalidStateAbbreviation(res);
+
   const { funfacts } = req.body;
-  if (!funfacts?.length || !Array.isArray(funfacts)) {
-    return res.status(400).json({ error: 'funfacts array is required' });
+
+  if (!funfacts) return res.status(400).json({ message: 'State fun facts value required' });
+  if (!Array.isArray(funfacts)) return res.status(400).json({ message: 'State fun facts value must be an array' });
+
+  const stateCode = req.params.state.toUpperCase();
+  const existing = await State.findOne({ stateCode });
+
+  if (existing) {
+    existing.funfacts.push(...funfacts);
+    await existing.save();
+    return res.json(await State.findOne({ stateCode }));
   }
-  
-  try {
-    const stateCode = req.params.state.toUpperCase();
-    let state = await State.findOne({ stateCode });
-    
-    if (state) state.funfacts.push(...funfacts);
-    else state = new State({ stateCode, funfacts });
-    
-    await state.save();
-    res.json(state);
-  } catch (error) {
-    res.status(400).json({ error: 'State code must be unique' });
-  }
+
+  const created = await State.create({ stateCode, funfacts });
+  res.json(created);
 });
 
 // ✏️ PATCH: Replace funfact by 1-based index
 app.patch('/states/:state/funfact', async (req, res) => {
+  const baseState = getStateByCode(req.params.state);
+  if (!baseState) return invalidStateAbbreviation(res);
+
   const { index, funfact } = req.body;
-  if (!index || !funfact) return res.status(400).json({ error: 'index and funfact required' });
-  
+  if (!index) return res.status(400).json({ message: 'State fun fact index value required' });
+  if (!funfact) return res.status(400).json({ message: 'State fun fact value required' });
+
   const state = await State.findOne({ stateCode: req.params.state.toUpperCase() });
-  if (!state?.funfacts?.length) return res.status(404).json({ error: 'No fun facts found' });
-  
-  const idx = parseInt(index) - 1;
-  if (idx < 0 || idx >= state.funfacts.length) return res.status(400).json({ error: 'Invalid index' });
-  
+  if (!state?.funfacts?.length) {
+    return res.status(404).json({ message: `No Fun Facts found for ${baseState.stateName}` });
+  }
+
+  const idx = Number(index) - 1;
+  if (idx < 0 || idx >= state.funfacts.length) {
+    return res.status(404).json({ message: `No Fun Fact found at that index for ${baseState.stateName}` });
+  }
+
   state.funfacts[idx] = funfact;
   await state.save();
   res.json(state);
@@ -175,15 +202,22 @@ app.patch('/states/:state/funfact', async (req, res) => {
 
 // 🗑️ DELETE: Remove funfact by 1-based index
 app.delete('/states/:state/funfact', async (req, res) => {
+  const baseState = getStateByCode(req.params.state);
+  if (!baseState) return invalidStateAbbreviation(res);
+
   const { index } = req.body;
-  if (!index) return res.status(400).json({ error: 'index required' });
-  
+  if (!index) return res.status(400).json({ message: 'State fun fact index value required' });
+
   const state = await State.findOne({ stateCode: req.params.state.toUpperCase() });
-  if (!state?.funfacts?.length) return res.status(404).json({ error: 'No fun facts found' });
-  
-  const idx = parseInt(index) - 1;
-  if (idx < 0 || idx >= state.funfacts.length) return res.status(400).json({ error: 'Invalid index' });
-  
+  if (!state?.funfacts?.length) {
+    return res.status(404).json({ message: `No Fun Facts found for ${baseState.stateName}` });
+  }
+
+  const idx = Number(index) - 1;
+  if (idx < 0 || idx >= state.funfacts.length) {
+    return res.status(404).json({ message: `No Fun Fact found at that index for ${baseState.stateName}` });
+  }
+
   state.funfacts.splice(idx, 1);
   await state.save();
   res.json(state);
@@ -191,14 +225,7 @@ app.delete('/states/:state/funfact', async (req, res) => {
 
 // 🚫 404 Catch-all (HTML/JSON based on Accept header)
 app.use('/states/*', (req, res) => {
-  const accept = req.get('Accept') || '';
-  res.status(404);
-  
-  if (accept.includes('text/html')) {
-    res.send(`<h1>404 - Route Not Found</h1><p>${req.originalUrl}</p><a href="/">Home</a>`);
-  } else {
-    res.json({ error: '404 Not Found' });
-  }
+  res.status(404).json({ message: 'Invalid state abbreviation parameter' });
 });
 
 app.use('*', (req, res) => {
