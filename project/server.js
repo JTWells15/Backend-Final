@@ -3,6 +3,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const path = require('path');
 const fs = require('fs');
+const cors = require('cors');
 
 const State = require('./models/States');
 const app = express();
@@ -10,6 +11,7 @@ const app = express();
 // PORT 5000 for Render compatibility
 const PORT = process.env.PORT || 5000;
 
+app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 

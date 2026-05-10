@@ -1,0 +1,3 @@
+- [x] Add CORS import in `server.js`
+- [x] Add CORS middleware `app.use(cors())` before routes
+- [x] Mark tasks complete after edit
