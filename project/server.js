@@ -96,6 +96,8 @@ function invalidAbbr(res) {
   return res.status(400).json({ message: 'Invalid state abbreviation parameter' });
 }
 
+const statesWithFunfactsInList = new Set(['KS', 'NE', 'OK', 'MO', 'CO']);
+
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public/index.html'));
 });
@@ -112,7 +114,12 @@ app.get('/states/', async (req, res) => {
     states.map(async (s) => {
       const mongo = await State.findOne({ stateCode: s.code }).lean();
       const base = mapBaseState(s);
-      if (mongo && Array.isArray(mongo.funfacts) && mongo.funfacts.length > 0) {
+      if (
+        statesWithFunfactsInList.has(s.code) &&
+        mongo &&
+        Array.isArray(mongo.funfacts) &&
+        mongo.funfacts.length > 0
+      ) {
         return { ...base, funfacts: mongo.funfacts };
       }
       return base;
