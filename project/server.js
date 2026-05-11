@@ -8,14 +8,12 @@ const cors = require('cors');
 const State = require('./models/States');
 const app = express();
 
-// PORT 5000 for Render compatibility
 const PORT = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Load statesData.json
 let statesData = [];
 try {
   statesData = JSON.parse(fs.readFileSync('./statesData.json', 'utf8'));
@@ -24,7 +22,6 @@ try {
   console.error('❌ Missing statesData.json - ADD IT TO REPO!');
 }
 
-// MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true
@@ -36,130 +33,243 @@ mongoose.connection.on('connected', async () => {
 });
 
 async function seedFunFacts() {
-  const facts = {
+  const defaultFacts = {
     KS: ['Wichita = Air Capital', 'Helium discovered here', 'Tornado capital'],
     MO: ['St Louis urban forest', 'First parachute', 'Mark Twain born'],
     OK: ['Most man-made lakes', 'Route 66 starts', '"Red people"'],
     NE: ['Coast midpoint', '25% US corn', 'Carhenge'],
     CO: ['Most ski resorts', '54 fourteeners', 'Highest capital']
   };
-  
-  for (let [code, factsArray] of Object.entries(facts)) {
-    await State.findOneAndUpdate(
-      { stateCode: code },
-      { stateCode: code, funfacts: factsArray },
-      { upsert: true }
-    );
+
+  for (const s of statesData) {
+    const code = s.code.toUpperCase();
+    const factsArray = defaultFacts[code];
+
+    if (Array.isArray(factsArray) && factsArray.length) {
+      await State.findOneAndUpdate(
+        { stateCode: code },
+        { stateCode: code, $setOnInsert: { funfacts: factsArray } },
+        { upsert: true, new: true }
+      );
+    } else {
+      await State.findOneAndUpdate(
+        { stateCode: code },
+        { stateCode: code, $setOnInsert: { funfacts: [] } },
+        { upsert: true, new: true }
+      );
+    }
   }
-  console.log('✅ Seeded KS,MO,OK,NE,CO fun facts');
+
+  console.log(`✅ Seeded records for all ${statesData.length} states`);
 }
 
-// ==================== ROUTES ====================
+const codeToState = new Map(statesData.map((s) => [s.code.toUpperCase(), s]));
 
-// Root HTML
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public/index.html')));
+function getCode(param) {
+  return String(param || '').toUpperCase();
+}
 
-// All states
+function getStateByCode(code) {
+  return codeToState.get(code);
+}
+
+function isValidCode(code) {
+  return codeToState.has(code);
+}
+
+function mapBaseState(state) {
+  return {
+    state: state.state,
+    abbreviation: state.code,
+    capital_city: state.capital_city,
+    nickname: state.nickname,
+    population: state.population,
+    admission_date: state.admission_date
+  };
+}
+
+function formatPopulation(num) {
+  return Number(num).toLocaleString('en-US');
+}
+
+function invalidAbbr(res) {
+  return res.status(400).json({ message: 'Invalid state abbreviation parameter' });
+}
+
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public/index.html'));
+});
+
 app.get('/states/', async (req, res) => {
   const { contig } = req.query;
   let states = statesData;
-  
-  if (contig === 'true') states = states.filter(s => !['AK','HI'].includes(s.stateCode));
-  if (contig === 'false') states = states.filter(s => ['AK','HI'].includes(s.stateCode));
-  
-  const withFacts = await Promise.all(states.map(async s => {
-    const mongo = await State.findOne({ stateCode: s.stateCode });
-    return { ...s, funfacts: mongo?.funfacts || [] };
-  }));
-  res.json(withFacts);
+
+  if (contig === 'true') {
+    states = states.filter((s) => !['AK', 'HI'].includes(s.code));
+  } else if (contig === 'false') {
+    states = states.filter((s) => ['AK', 'HI'].includes(s.code));
+  }
+
+  const result = await Promise.all(
+    states.map(async (s) => {
+      const mongo = await State.findOne({ stateCode: s.code }).lean();
+      const base = mapBaseState(s);
+      if (mongo && Array.isArray(mongo.funfacts) && mongo.funfacts.length > 0) {
+        return { ...base, funfacts: mongo.funfacts };
+      }
+      return base;
+    })
+  );
+
+  res.json(result);
 });
 
-// Single state
 app.get('/states/:state', async (req, res) => {
-  const state = statesData.find(s => s.stateCode === req.params.state.toUpperCase());
-  if (!state) return res.status(404).json({ error: 'Not Found' });
-  
-  const mongo = await State.findOne({ stateCode: req.params.state.toUpperCase() });
-  res.json({ ...state, funfacts: mongo?.funfacts || [] });
+  const code = getCode(req.params.state);
+  if (!isValidCode(code)) return invalidAbbr(res);
+
+  const state = getStateByCode(code);
+  const mongo = await State.findOne({ stateCode: code }).lean();
+
+  const payload = mapBaseState(state);
+  payload.funfacts = mongo?.funfacts || [];
+
+  res.json(payload);
 });
 
-// Random funfact
 app.get('/states/:state/funfact', async (req, res) => {
-  const mongo = await State.findOne({ stateCode: req.params.state.toUpperCase() });
-  if (!mongo?.funfacts?.length) return res.status(404).json({ error: 'No fun facts' });
-  res.json({ funfact: mongo.funfacts[Math.floor(Math.random() * mongo.funfacts.length)] });
+  const code = getCode(req.params.state);
+  if (!isValidCode(code)) return invalidAbbr(res);
+
+  const state = getStateByCode(code);
+  const mongo = await State.findOne({ stateCode: code }).lean();
+  if (!mongo?.funfacts?.length) {
+    return res.status(404).json({ message: `No Fun Facts found for ${state.state}` });
+  }
+
+  const randomFact = mongo.funfacts[Math.floor(Math.random() * mongo.funfacts.length)];
+  res.json({ funfact: randomFact });
 });
 
-// Field-specific
-['capital','nickname','population','admission'].forEach(field => {
-  app.get(`/states/:state/${field}`, (req, res) => {
-    const state = statesData.find(s => s.stateCode === req.params.state.toUpperCase());
-    if (!state) return res.status(404).json({ error: 'Not Found' });
-    res.json({ state: state.stateName, [field]: state[field] });
+app.get('/states/:state/capital', (req, res) => {
+  const code = getCode(req.params.state);
+  if (!isValidCode(code)) return invalidAbbr(res);
+  const state = getStateByCode(code);
+  res.json({ state: state.state, capital: state.capital_city });
+});
+
+app.get('/states/:state/nickname', (req, res) => {
+  const code = getCode(req.params.state);
+  if (!isValidCode(code)) return invalidAbbr(res);
+  const state = getStateByCode(code);
+  res.json({ state: state.state, nickname: state.nickname });
+});
+
+app.get('/states/:state/population', (req, res) => {
+  const code = getCode(req.params.state);
+  if (!isValidCode(code)) return invalidAbbr(res);
+  const state = getStateByCode(code);
+  res.json({ state: state.state, population: formatPopulation(state.population) });
+});
+
+app.get('/states/:state/admission', (req, res) => {
+  const code = getCode(req.params.state);
+  if (!isValidCode(code)) return invalidAbbr(res);
+  const state = getStateByCode(code);
+  res.json({ state: state.state, admitted: state.admission_date });
+});
+
+app.post('/states/:state/funfact', async (req, res) => {
+  const code = getCode(req.params.state);
+  if (!isValidCode(code)) return invalidAbbr(res);
+
+  const { funfacts } = req.body;
+  if (funfacts === undefined) {
+    return res.status(400).json({ message: 'State fun facts value required' });
+  }
+  if (!Array.isArray(funfacts)) {
+    return res.status(400).json({ message: 'State fun facts value must be an array' });
+  }
+
+  const state = getStateByCode(code);
+
+  const updated = await State.findOneAndUpdate(
+    { stateCode: code },
+    { $push: { funfacts: { $each: funfacts } } },
+    { upsert: true, new: true }
+  ).lean();
+
+  res.json({
+    message: `Successfully added fun facts for ${state.state}`,
+    funfacts: updated.funfacts
   });
 });
 
-// POST funfact
-app.post('/states/:state/funfact', async (req, res) => {
-  const { funfacts } = req.body;
-  if (!Array.isArray(funfacts) || !funfacts.length) {
-    return res.status(400).json({ error: 'funfacts array required' });
-  }
-  
-  const state = await State.findOneAndUpdate(
-    { stateCode: req.params.state.toUpperCase() },
-    { $push: { funfacts: { $each: funfacts } } },
-    { upsert: true, new: true }
-  );
-  res.json(state);
-});
-
-// PATCH funfact (1-based index)
 app.patch('/states/:state/funfact', async (req, res) => {
+  const code = getCode(req.params.state);
+  if (!isValidCode(code)) return invalidAbbr(res);
+
   const { index, funfact } = req.body;
-  if (!index || !funfact) return res.status(400).json({ error: 'index, funfact required' });
-  
-  const state = await State.findOne({ stateCode: req.params.state.toUpperCase() });
-  if (!state?.funfacts?.length) return res.status(404).json({ error: 'No funfacts' });
-  
-  const idx = parseInt(index) - 1;
-  if (idx < 0 || idx >= state.funfacts.length) return res.status(400).json({ error: 'Bad index' });
-  
-  state.funfacts[idx] = funfact;
-  await state.save();
-  res.json(state);
-});
-
-// DELETE funfact (1-based index)
-app.delete('/states/:state/funfact', async (req, res) => {
-  const { index } = req.body;
-  if (!index) return res.status(400).json({ error: 'index required' });
-  
-  const state = await State.findOne({ stateCode: req.params.state.toUpperCase() });
-  if (!state?.funfacts?.length) return res.status(404).json({ error: 'No funfacts' });
-  
-  const idx = parseInt(index) - 1;
-  if (idx < 0 || idx >= state.funfacts.length) return res.status(400).json({ error: 'Bad index' });
-  
-  state.funfacts.splice(idx, 1);
-  await state.save();
-  res.json(state);
-});
-
-// 404
-app.use('/states/*', (req, res) => {
-  const accept = req.get('Accept') || '';
-  res.status(404);
-  if (accept.includes('text/html')) {
-    res.send('<h1 style="text-align:center;font-family:sans-serif;padding:50px">404 - Route Not Found<br><a href="/">Home</a></h1>');
-  } else {
-    res.json({ error: '404 Not Found' });
+  if (index === undefined) {
+    return res.status(400).json({ message: 'State fun fact index value required' });
   }
+  if (typeof funfact !== 'string' || !funfact.trim()) {
+    return res.status(400).json({ message: 'State fun fact value required' });
+  }
+
+  const stateMeta = getStateByCode(code);
+  const stateDoc = await State.findOne({ stateCode: code });
+  if (!stateDoc?.funfacts?.length) {
+    return res.status(404).json({ message: `No Fun Facts found for ${stateMeta.state}` });
+  }
+
+  const idx = Number(index) - 1;
+  if (!Number.isInteger(idx) || idx < 0 || idx >= stateDoc.funfacts.length) {
+    return res.status(400).json({ message: `No Fun Fact found at that index for ${stateMeta.state}` });
+  }
+
+  stateDoc.funfacts[idx] = funfact;
+  await stateDoc.save();
+
+  res.json({
+    message: `Successfully updated fun fact for ${stateMeta.state}`,
+    funfacts: stateDoc.funfacts
+  });
 });
 
-app.use('*', (req, res) => res.status(404).send('<h1>404</h1>'));
+app.delete('/states/:state/funfact', async (req, res) => {
+  const code = getCode(req.params.state);
+  if (!isValidCode(code)) return invalidAbbr(res);
 
-// START SERVER - PORT 5000 + Render binding
+  const { index } = req.body;
+  if (index === undefined) {
+    return res.status(400).json({ message: 'State fun fact index value required' });
+  }
+
+  const stateMeta = getStateByCode(code);
+  const stateDoc = await State.findOne({ stateCode: code });
+  if (!stateDoc?.funfacts?.length) {
+    return res.status(404).json({ message: `No Fun Facts found for ${stateMeta.state}` });
+  }
+
+  const idx = Number(index) - 1;
+  if (!Number.isInteger(idx) || idx < 0 || idx >= stateDoc.funfacts.length) {
+    return res.status(400).json({ message: `No Fun Fact found at that index for ${stateMeta.state}` });
+  }
+
+  stateDoc.funfacts.splice(idx, 1);
+  await stateDoc.save();
+
+  res.json({
+    message: `Successfully deleted fun fact for ${stateMeta.state}`,
+    funfacts: stateDoc.funfacts
+  });
+});
+
+app.use((req, res) => {
+  res.status(404).sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log('\n🚀 US STATES API v1.0');
   console.log(`📡 Port: ${PORT}`);
