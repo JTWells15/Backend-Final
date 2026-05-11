@@ -104,10 +104,8 @@ app.get('/states/', async (req, res) => {
   const { contig } = req.query;
   let states = statesData;
 
-  if (contig === 'true') {
+  if (contig === 'true' || contig === 'false') {
     states = states.filter((s) => !['AK', 'HI'].includes(s.code));
-  } else if (contig === 'false') {
-    states = states.filter((s) => ['AK', 'HI'].includes(s.code));
   }
 
   const result = await Promise.all(
@@ -132,7 +130,9 @@ app.get('/states/:state', async (req, res) => {
   const mongo = await State.findOne({ stateCode: code }).lean();
 
   const payload = mapBaseState(state);
-  payload.funfacts = mongo?.funfacts || [];
+  if (mongo && Array.isArray(mongo.funfacts) && mongo.funfacts.length > 0) {
+    payload.funfacts = mongo.funfacts;
+  }
 
   res.json(payload);
 });
