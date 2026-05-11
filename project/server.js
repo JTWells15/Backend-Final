@@ -118,7 +118,7 @@ app.get('/states/', async (req, res) => {
         statesWithFunfactsInList.has(s.code) &&
         mongo &&
         Array.isArray(mongo.funfacts) &&
-        mongo.funfacts.length > 0
+        mongo.funfacts.length >= 3
       ) {
         return { ...base, funfacts: mongo.funfacts };
       }
