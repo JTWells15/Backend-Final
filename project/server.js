@@ -106,10 +106,8 @@ app.get('/states/', async (req, res) => {
   const { contig } = req.query;
   let states = statesData;
 
-  if (contig === 'true') {
+  if (contig === 'true' || contig === 'false') {
     states = states.filter((s) => !['AK', 'HI'].includes(s.code));
-  } else if (contig === 'false') {
-    states = states.filter((s) => ['AK', 'HI'].includes(s.code));
   }
 
   const result = await Promise.all(
@@ -209,8 +207,10 @@ app.post('/states/:state/funfact', async (req, res) => {
   ).lean();
 
   res.json({
-    message: `Successfully added fun facts for ${state.state}`,
-    funfacts: updated.funfacts
+    state: state.state,
+    funfacts: updated.funfacts,
+    totalFunfacts: updated.funfacts.length,
+    message: `Successfully added fun facts for ${state.state}`
   });
 });
 
@@ -241,8 +241,10 @@ app.patch('/states/:state/funfact', async (req, res) => {
   await stateDoc.save();
 
   res.json({
-    message: `Successfully updated fun fact for ${stateMeta.state}`,
-    funfacts: stateDoc.funfacts
+    state: stateMeta.state,
+    funfacts: stateDoc.funfacts,
+    totalFunfacts: stateDoc.funfacts.length,
+    message: `Successfully updated fun fact for ${stateMeta.state}`
   });
 });
 
@@ -270,8 +272,10 @@ app.delete('/states/:state/funfact', async (req, res) => {
   await stateDoc.save();
 
   res.json({
-    message: `Successfully deleted fun fact for ${stateMeta.state}`,
-    funfacts: stateDoc.funfacts
+    state: stateMeta.state,
+    funfacts: stateDoc.funfacts,
+    totalFunfacts: stateDoc.funfacts.length,
+    message: `Successfully deleted fun fact for ${stateMeta.state}`
   });
 });
 
