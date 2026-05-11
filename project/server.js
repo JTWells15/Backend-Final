@@ -77,17 +77,6 @@ function isValidCode(code) {
   return codeToState.has(code);
 }
 
-function mapBaseState(state) {
-  return {
-    state: state.state,
-    abbreviation: state.code,
-    capital_city: state.capital_city,
-    nickname: state.nickname,
-    population: state.population,
-    admission_date: state.admission_date
-  };
-}
-
 function formatPopulation(num) {
   return Number(num).toLocaleString('en-US');
 }
@@ -95,8 +84,6 @@ function formatPopulation(num) {
 function invalidAbbr(res) {
   return res.status(400).json({ message: 'Invalid state abbreviation parameter' });
 }
-
-const statesWithFunfactsInList = new Set(['KS', 'NE', 'OK', 'MO', 'CO']);
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public/index.html'));
@@ -106,23 +93,19 @@ app.get('/states/', async (req, res) => {
   const { contig } = req.query;
   let states = statesData;
 
-  if (contig === 'true' || contig === 'false') {
+  if (contig === 'true') {
     states = states.filter((s) => !['AK', 'HI'].includes(s.code));
+  } else if (contig === 'false') {
+    states = states.filter((s) => ['AK', 'HI'].includes(s.code));
   }
 
   const result = await Promise.all(
     states.map(async (s) => {
       const mongo = await State.findOne({ stateCode: s.code }).lean();
-      const base = mapBaseState(s);
-      if (
-        statesWithFunfactsInList.has(s.code) &&
-        mongo &&
-        Array.isArray(mongo.funfacts) &&
-        mongo.funfacts.length >= 3
-      ) {
-        return { ...base, funfacts: mongo.funfacts };
+      if (mongo && Array.isArray(mongo.funfacts) && mongo.funfacts.length > 0) {
+        return { ...s, funfacts: mongo.funfacts };
       }
-      return base;
+      return { ...s };
     })
   );
 
@@ -136,8 +119,8 @@ app.get('/states/:state', async (req, res) => {
   const state = getStateByCode(code);
   const mongo = await State.findOne({ stateCode: code }).lean();
 
-  const payload = mapBaseState(state);
-  if (mongo && Array.isArray(mongo.funfacts)) {
+  const payload = { ...state };
+  if (mongo && Array.isArray(mongo.funfacts) && mongo.funfacts.length > 0) {
     payload.funfacts = mongo.funfacts;
   }
 
