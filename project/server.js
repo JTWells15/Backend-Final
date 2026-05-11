@@ -120,7 +120,7 @@ app.get('/states/:state', async (req, res) => {
   const mongo = await State.findOne({ stateCode: code }).lean();
 
   const payload = { ...state };
-  if (mongo && Array.isArray(mongo.funfacts) && mongo.funfacts.length > 0) {
+  if (mongo && Array.isArray(mongo.funfacts)) {
     payload.funfacts = mongo.funfacts;
   }
 
